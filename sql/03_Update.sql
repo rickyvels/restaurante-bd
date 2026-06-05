@@ -1,0 +1,15 @@
+UPDATE SUCURSAL 
+SET nombre='Sucursal Habanas',direccion='Av.Bellavista 432'
+WHERE ciudad='Arequipa';
+
+UPDATE CLIENTE
+SET nombre = 'Jose', apellido = 'Velasquez'
+WHERE dni = '12345678';
+
+UPDATE PROVEEDOR
+SET nombre='Tyler', ruc='20552103816', telefono='598005744', email='Tlr_937@gmail.com'
+WHERE id_scrsal='4';
+
+UPDATE PEDIDO
+SET id_empleado= 2, id_mesa= 4, estado='Entregado', total=150
+WHERE id_cliente=3;
