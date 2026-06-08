@@ -3,6 +3,50 @@
 @tailwind utilities;
 
 :root { --bg: #f9fafb; --fg: #111827; }
-.dark { --bg: #0f172a; --fg: #f1f5f9; }
+.dark { --bg: #030712; --fg: #f1f5f9; }
 
-body { background: var(--bg); color: var(--fg); transition: background 0.2s, color 0.2s; }
+body { background: var(--bg); color: var(--fg); transition: background 0.3s ease, color 0.3s ease; }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 9999px; }
+.dark ::-webkit-scrollbar-thumb { background: #374151; }
+::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes slideInFromRight {
+  from { opacity: 0; transform: translateX(100%); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInFromBottom {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes backdropIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes growBar {
+  from { width: 0; }
+  to   { width: var(--bar-w); }
+}
+
+.animate-fade-up     { animation: fadeUp 0.35s ease both; }
+.animate-slide-right { animation: slideInFromRight 0.32s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.animate-slide-bottom { animation: slideInFromBottom 0.3s ease both; }
+.animate-backdrop    { animation: backdropIn 0.2s ease both; }
+
+.bar-fill { width: var(--bar-pct, 0%); transition: width 0.7s ease; }
+
+.anim-delay-0  { animation-delay: 0s; }
+.anim-delay-1  { animation-delay: 0.07s; }
+.anim-delay-2  { animation-delay: 0.14s; }
+.anim-delay-3  { animation-delay: 0.21s; }
+.anim-delay-4  { animation-delay: 0.3s; }
+.anim-delay-5  { animation-delay: 0.05s; }
+.anim-delay-10 { animation-delay: 0.1s; }
+.anim-delay-15 { animation-delay: 0.15s; }
+.anim-delay-20 { animation-delay: 0.2s; }
