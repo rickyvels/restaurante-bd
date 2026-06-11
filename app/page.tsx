@@ -1,144 +1,246 @@
 'use client'
 import { useEffect, useState } from 'react'
-import { supabase } from '@/lib/supabase'
-import { ShoppingBag, Users, Package, TrendingUp, Clock, ArrowRight } from 'lucide-react'
-import Link from 'next/link'
+import { FUNCTIONS_URL, ANON_KEY } from '@/lib/supabase'
+import { Download, Play, Code2, ChevronDown, TrendingUp, Package, Coins, Clock, Sparkles } from 'lucide-react'
 
-function useCounter(target: number, active: boolean) {
-  const [val, setVal] = useState(0)
+const STORAGE_KEY = 'reporte_historial'
+
+export default function Reporte() {
+  const [data, setData] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [ran, setRan] = useState(false)
+  const [showSQL, setShowSQL] = useState(false)
+  const [lastRun, setLastRun] = useState<string | null>(null)
+  const [historial, setHistorial] = useState<any[]>([])
+
+  // Cargar resultados guardados al abrir la pagina
   useEffect(() => {
-    if (!active || target === 0) { setVal(target); return }
-    let curr = 0
-    const step = target / 40
-    const id = setInterval(() => {
-      curr = Math.min(curr + step, target)
-      setVal(curr >= target ? target : Math.floor(curr))
-      if (curr >= target) clearInterval(id)
-    }, 16)
-    return () => clearInterval(id)
-  }, [target, active])
-  return val
-}
-
-const estadoBadge: Record<string, string> = {
-  'Pendiente': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-  'En preparacion': 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  'Entregado': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
-  'Cancelado': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-}
-
-export default function Dashboard() {
-  const [stats, setStats] = useState({ pedidos: 0, clientes: 0, productos: 0, ingresos: 0 })
-  const [pedidosRecientes, setPedidosRecientes] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    async function load() {
-      const [p, c, pr, d] = await Promise.all([
-        supabase.from('pedido').select('*', { count: 'exact', head: true }),
-        supabase.from('cliente').select('*', { count: 'exact', head: true }),
-        supabase.from('producto').select('*', { count: 'exact', head: true }),
-        supabase.from('pedido').select('total'),
-      ])
-      const ingresos = (d.data || []).reduce((s: number, r: any) => s + parseFloat(r.total || 0), 0)
-      setStats({ pedidos: p.count || 0, clientes: c.count || 0, productos: pr.count || 0, ingresos })
-      const { data: recientes } = await supabase
-        .from('pedido').select('id_pedido, estado, total, fecha_hora, cliente(nombre, apellido)')
-        .order('id_pedido', { ascending: false }).limit(5)
-      setPedidosRecientes(recientes || [])
-      setLoading(false)
-    }
-    load()
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.data?.length) {
+          setData(parsed.data)
+          setLastRun(parsed.fecha)
+          setHistorial(parsed.historial || [])
+          setRan(true)
+        }
+      }
+    } catch {}
   }, [])
 
-  const cnt1 = useCounter(stats.pedidos, !loading)
-  const cnt2 = useCounter(stats.clientes, !loading)
-  const cnt3 = useCounter(stats.productos, !loading)
+  async function runReporte() {
+    setLoading(true)
+    try {
+      const res = await fetch(`${FUNCTIONS_URL}/reporte-ventas`, {
+        headers: { 'Authorization': `Bearer ${ANON_KEY}` }
+      })
+      const json = await res.json()
+      const rows = Array.isArray(json) ? json : []
+      const fecha = new Date().toLocaleString('es-PE')
+      
+      const nuevoHistorial = [
+        { fecha, productos: rows.length, ingresos: rows.reduce((s, r) => s + parseFloat(r.ingreso_total || 0), 0) },
+        ...historial
+      ].slice(0, 5)
 
-  const cards = [
-    { label: 'Total pedidos', display: String(cnt1), icon: ShoppingBag, iconBg: 'bg-blue-100 dark:bg-blue-900/40', iconColor: 'text-blue-600 dark:text-blue-400', border: 'border-l-blue-500', delay: 'anim-delay-0' },
-    { label: 'Clientes', display: String(cnt2), icon: Users, iconBg: 'bg-emerald-100 dark:bg-emerald-900/40', iconColor: 'text-emerald-600 dark:text-emerald-400', border: 'border-l-emerald-500', delay: 'anim-delay-1' },
-    { label: 'Productos', display: String(cnt3), icon: Package, iconBg: 'bg-purple-100 dark:bg-purple-900/40', iconColor: 'text-purple-600 dark:text-purple-400', border: 'border-l-purple-500', delay: 'anim-delay-2' },
-    { label: 'Ingresos totales', display: `S/ ${stats.ingresos.toFixed(2)}`, icon: TrendingUp, iconBg: 'bg-orange-100 dark:bg-orange-900/40', iconColor: 'text-orange-600 dark:text-orange-400', border: 'border-l-orange-500', delay: 'anim-delay-3' },
-  ]
+      setData(rows)
+      setLastRun(fecha)
+      setHistorial(nuevoHistorial)
+      setRan(true)
+
+      // Guardar para que persista al volver
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ data: rows, fecha, historial: nuevoHistorial }))
+    } catch (e) { console.error(e) }
+    setLoading(false)
+  }
+
+  async function downloadCSV() {
+    const res = await fetch(`${FUNCTIONS_URL}/reporte-ventas?formato=csv`, {
+      headers: { 'Authorization': `Bearer ${ANON_KEY}` }
+    })
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a'); a.href = url; a.download = 'reporte-ventas.csv'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const totalVendido = data.reduce((s, r) => s + parseFloat(r.total_vendido || 0), 0)
+  const totalIngresos = data.reduce((s, r) => s + parseFloat(r.ingreso_total || 0), 0)
+  const topProducto = data[0]
+  const maxVendido = Math.max(...data.map(r => parseFloat(r.total_vendido || 0)), 1)
+
+  const categoriaColors: Record<string, string> = {
+    'Bebidas': 'from-cyan-500 to-blue-500',
+    'Entradas': 'from-emerald-500 to-teal-500',
+    'Platos principales': 'from-orange-500 to-red-500',
+    'Postres': 'from-pink-500 to-rose-500',
+    'Desayunos': 'from-amber-500 to-yellow-500',
+  }
 
   return (
-    <div>
-      <div className="mb-8 animate-fade-up">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Dashboard</h1>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">Resumen general del restaurante</p>
+    <div className="relative">
+      {/* Glow decorativo */}
+      <div className="absolute -top-20 -right-20 w-72 h-72 bg-orange-500/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="absolute top-40 -left-20 w-72 h-72 bg-blue-500/10 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Header */}
+      <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+        <div>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-orange-500/10 text-orange-500 border border-orange-500/20">
+              <Sparkles size={12} /> Analytics en tiempo real
+            </span>
+          </div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-400 bg-clip-text text-transparent">
+            Reporte de ventas
+          </h1>
+          {lastRun && (
+            <p className="flex items-center gap-1.5 text-sm text-gray-500 dark:text-gray-400 mt-1">
+              <Clock size={13} /> Última ejecución: {lastRun}
+            </p>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={runReporte} disabled={loading}
+            className="group flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold shadow-lg shadow-orange-500/25 transition-all hover:shadow-orange-500/40 hover:scale-[1.02]">
+            <Play size={15} className="group-hover:translate-x-0.5 transition-transform" />
+            {loading ? 'Analizando...' : 'Ejecutar reporte'}
+          </button>
+          {ran && data.length > 0 && (
+            <button onClick={downloadCSV}
+              className="flex items-center gap-2 px-5 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
+              <Download size={15} /> CSV
+            </button>
+          )}
+        </div>
       </div>
 
-      {loading ? (
-        <div className="animate-pulse">
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            {[...Array(4)].map((_, i) => (
-              <div key={i} className="bg-gray-200 dark:bg-gray-800 rounded-xl h-28" />
-            ))}
+      {/* Metricas hero */}
+      {ran && data.length > 0 && (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div className="relative overflow-hidden bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-orange-500/5 rounded-full -mr-8 -mt-8" />
+            <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+              <Package size={15} className="text-orange-500" /> Productos destacados
+            </div>
+            <div className="text-3xl font-bold text-gray-900 dark:text-white">{data.length}</div>
+            <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">con más de 2 unidades vendidas</div>
           </div>
-          <div className="bg-gray-200 dark:bg-gray-800 rounded-xl h-64" />
+          <div className="relative overflow-hidden bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5">
+            <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full -mr-8 -mt-8" />
+            <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400 text-sm mb-1">
+              <Coins size={15} className="text-emerald-500" /> Ingresos totales
+            </div>
+            <div className="text-3xl font-bold text-gray-900 dark:text-white">S/ {totalIngresos.toFixed(2)}</div>
+            <div className="text-xs text-gray-400 dark:text-gray-500 mt-1">{totalVendido} unidades vendidas</div>
+          </div>
+          <div className="relative overflow-hidden bg-gradient-to-br from-orange-500 to-orange-600 rounded-2xl p-5 text-white shadow-lg shadow-orange-500/20">
+            <div className="flex items-center gap-2 text-orange-100 text-sm mb-1">
+              <TrendingUp size={15} /> Top producto
+            </div>
+            <div className="text-xl font-bold truncate">{topProducto?.producto}</div>
+            <div className="text-xs text-orange-100 mt-1">{topProducto?.total_vendido} unidades · S/ {parseFloat(topProducto?.ingreso_total || 0).toFixed(2)}</div>
+          </div>
         </div>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-            {cards.map(c => (
-              <div
-                key={c.label}
-                className={`animate-fade-up ${c.delay} bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 border-l-4 ${c.border} p-5 hover:shadow-lg hover:-translate-y-0.5 transition-all duration-300`}>
-                <div className="flex items-start justify-between mb-4">
-                  <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider leading-tight">{c.label}</span>
-                  <div className={`p-2 rounded-lg ${c.iconBg} flex-shrink-0`}>
-                    <c.icon size={15} className={c.iconColor} />
+      )}
+
+      {/* Tabla de resultados con barras */}
+      {ran && data.length > 0 && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden mb-6">
+          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-800 flex items-center justify-between">
+            <h2 className="font-semibold text-gray-900 dark:text-white">Ranking de productos</h2>
+            <span className="text-xs text-gray-400">GROUP BY · HAVING &gt; 2</span>
+          </div>
+          <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
+            {data.map((r, i) => {
+              const pct = (parseFloat(r.total_vendido) / maxVendido) * 100
+              const grad = categoriaColors[r.categoria] || 'from-gray-400 to-gray-500'
+              return (
+                <div key={i} className="px-5 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+                  <div className="flex items-center justify-between mb-1.5">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="text-xs font-bold text-gray-300 dark:text-gray-600 w-5">#{i + 1}</span>
+                      <div className="min-w-0">
+                        <div className="font-medium text-gray-900 dark:text-white text-sm truncate">{r.producto}</div>
+                        <div className="text-xs text-gray-400">{r.categoria}</div>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0 ml-4">
+                      <div className="font-semibold text-gray-900 dark:text-white text-sm">S/ {parseFloat(r.ingreso_total).toFixed(2)}</div>
+                      <div className="text-xs text-gray-400">{r.total_vendido} uds</div>
+                    </div>
+                  </div>
+                  <div className="h-1.5 bg-gray-100 dark:bg-gray-800 rounded-full overflow-hidden ml-8">
+                    <div className={`h-full rounded-full bg-gradient-to-r ${grad} transition-all duration-700`}
+                      style={{ width: `${pct}%` }} />
                   </div>
                 </div>
-                <div className="text-2xl font-bold text-gray-900 dark:text-white tabular-nums">{c.display}</div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Historial de ejecuciones */}
+      {historial.length > 0 && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5 mb-6">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <Clock size={14} className="text-gray-400" /> Historial de consultas
+          </h3>
+          <div className="space-y-2">
+            {historial.map((h, i) => (
+              <div key={i} className="flex items-center justify-between text-sm py-1.5 px-3 rounded-lg bg-gray-50 dark:bg-gray-800/50">
+                <span className="text-gray-500 dark:text-gray-400">{h.fecha}</span>
+                <span className="text-gray-700 dark:text-gray-300">{h.productos} productos · <span className="font-medium text-emerald-600 dark:text-emerald-400">S/ {h.ingresos.toFixed(2)}</span></span>
               </div>
             ))}
           </div>
+        </div>
+      )}
 
-          <div
-            className="animate-fade-up bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800"
-            style={{ animationDelay: '0.3s' }}>
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100 dark:border-gray-800">
-              <div className="flex items-center gap-2">
-                <Clock size={15} className="text-gray-400" />
-                <h2 className="font-semibold text-gray-900 dark:text-white">Pedidos recientes</h2>
+      {/* SQL oculto en boton colapsable */}
+      <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+        <button onClick={() => setShowSQL(!showSQL)}
+          className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors">
+          <span className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+            <Code2 size={16} className="text-orange-500" /> Ver consulta SQL
+          </span>
+          <ChevronDown size={16} className={`text-gray-400 transition-transform duration-300 ${showSQL ? 'rotate-180' : ''}`} />
+        </button>
+        {showSQL && (
+          <div className="px-5 pb-5">
+            <div className="bg-gray-950 rounded-xl p-4 font-mono text-xs leading-relaxed overflow-x-auto border border-gray-800">
+              <div className="flex gap-1.5 mb-3">
+                <div className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
+                <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
+                <div className="w-2.5 h-2.5 rounded-full bg-green-500/80" />
               </div>
-              <Link href="/pedidos" className="flex items-center gap-1 text-xs font-medium text-orange-500 hover:text-orange-600 transition-colors group">
-                Ver todos <ArrowRight size={13} className="group-hover:translate-x-0.5 transition-transform" />
-              </Link>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr>
-                    <th className="text-left py-3 px-5 text-xs font-medium text-gray-400 uppercase tracking-wider">#</th>
-                    <th className="text-left py-3 px-5 text-xs font-medium text-gray-400 uppercase tracking-wider">Cliente</th>
-                    <th className="text-left py-3 px-5 text-xs font-medium text-gray-400 uppercase tracking-wider">Estado</th>
-                    <th className="text-right py-3 px-5 text-xs font-medium text-gray-400 uppercase tracking-wider">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pedidosRecientes.map(p => (
-                    <tr key={p.id_pedido} className="border-t border-gray-50 dark:border-gray-800/50 hover:bg-orange-50/40 dark:hover:bg-orange-950/10 transition-colors">
-                      <td className="py-3.5 px-5 font-mono text-xs font-medium text-gray-400">#{p.id_pedido}</td>
-                      <td className="py-3.5 px-5 font-medium text-gray-900 dark:text-white">{p.cliente?.nombre} {p.cliente?.apellido}</td>
-                      <td className="py-3.5 px-5">
-                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${estadoBadge[p.estado] || estadoBadge['Pendiente']}`}>
-                          {p.estado}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-5 text-right font-semibold text-gray-900 dark:text-white tabular-nums">
-                        S/ {parseFloat(p.total).toFixed(2)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+              <pre className="text-gray-300">{`SELECT c.nombre AS categoria, p.nombre AS producto,
+       SUM(dp.cantidad) AS total_vendido,
+       SUM(dp.subtotal) AS ingreso_total
+FROM DETALLE_PEDIDO dp
+  JOIN PRODUCTO p  ON dp.id_producto  = p.id_producto
+  JOIN CATEGORIA c ON p.id_categoria = c.id_categoria
+GROUP BY c.nombre, p.nombre
+HAVING SUM(dp.cantidad) > 2
+ORDER BY total_vendido DESC;`}</pre>
             </div>
           </div>
-        </>
+        )}
+      </div>
+
+      {/* Estado vacio */}
+      {!ran && (
+        <div className="text-center py-16">
+          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-orange-500/10 mb-4">
+            <TrendingUp size={28} className="text-orange-500" />
+          </div>
+          <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">Tu reporte te espera</h3>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Presiona "Ejecutar reporte" para analizar las ventas en tiempo real</p>
+        </div>
       )}
     </div>
   )
 }
+
