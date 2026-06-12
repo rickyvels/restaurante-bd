@@ -1,18 +1,9 @@
 'use client'
 import { useEffect, useState } from 'react'
 import { supabase, FUNCTIONS_URL, ANON_KEY } from '@/lib/supabase'
-import { Plus, X, Check, ChevronDown, ShoppingBag } from 'lucide-react'
+import { Plus, X, ChevronDown, UserPlus, Clock } from 'lucide-react'
 
-const badge: Record<string, string> = {
-  'Pendiente': 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
-  'En preparacion': 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
-  'Entregado': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
-  'Cancelado': 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400',
-}
-const ESTADOS = ['Pendiente', 'En preparacion', 'Entregado', 'Cancelado']
-const FILTROS = ['Todos', ...ESTADOS]
-
-type Toast = { msg: string; type: 'success' | 'error' }
+const HISTORIAL_KEY = 'pedidos_historial'
 
 export default function Pedidos() {
   const [pedidos, setPedidos] = useState<any[]>([])
@@ -23,16 +14,25 @@ export default function Pedidos() {
   const [loading, setLoading] = useState(true)
   const [showForm, setShowForm] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [filtro, setFiltro] = useState('Todos')
-  const [editingStatus, setEditingStatus] = useState<number | null>(null)
-  const [toast, setToast] = useState<Toast | null>(null)
+  const [msg, setMsg] = useState('')
+  const [expandido, setExpandido] = useState<number | null>(null)
+  const [detalles, setDetalles] = useState<Record<number, any[]>>({})
+  const [historial, setHistorial] = useState<any[]>([])
+
   const [form, setForm] = useState({ id_cliente: '', id_empleado: '', id_mesa: '' })
   const [items, setItems] = useState([{ id_producto: '', cantidad: 1, precio_unitario: 0 }])
 
-  function showToast(msg: string, type: Toast['type']) {
-    setToast({ msg, type })
-    setTimeout(() => setToast(null), 3500)
-  }
+  // Nuevo cliente
+  const [nuevoCliente, setNuevoCliente] = useState(false)
+  const [clienteForm, setClienteForm] = useState({ nombre: '', apellido: '', dni: '', email: '' })
+
+  useEffect(() => {
+    try {
+      const h = localStorage.getItem(HISTORIAL_KEY)
+      if (h) setHistorial(JSON.parse(h))
+    } catch {}
+    loadData()
+  }, [])
 
   async function loadData() {
     const [p, c, e, m, pr] = await Promise.all([
@@ -42,252 +42,274 @@ export default function Pedidos() {
       supabase.from('mesa').select('id_mesa, numero, estado'),
       supabase.from('producto').select('id_producto, nombre, precio, stock'),
     ])
-    setPedidos(p.data || [])
-    setClientes(c.data || [])
-    setEmpleados(e.data || [])
-    setMesas(m.data || [])
-    setProductos(pr.data || [])
-    setLoading(false)
+    setPedidos(p.data || []); setClientes(c.data || []); setEmpleados(e.data || [])
+    setMesas(m.data || []); setProductos(pr.data || []); setLoading(false)
   }
 
-  useEffect(() => { loadData() }, [])
+  async function toggleDetalle(id: number) {
+    if (expandido === id) { setExpandido(null); return }
+    setExpandido(id)
+    if (!detalles[id]) {
+      const { data } = await supabase
+        .from('detalle_pedido')
+        .select('cantidad, precio_unitario, subtotal, producto(nombre)')
+        .eq('id_pedido', id)
+      setDetalles(prev => ({ ...prev, [id]: data || [] }))
+    }
+  }
 
-  const filtrados = filtro === 'Todos' ? pedidos : pedidos.filter(p => p.estado === filtro)
+  async function crearCliente() {
+    if (!clienteForm.nombre || !clienteForm.apellido || !clienteForm.dni) {
+      setMsg('Error: completa nombre, apellido y DNI del cliente'); return
+    }
+    const email = clienteForm.email || `${clienteForm.nombre.toLowerCase()}.${clienteForm.dni}@cliente.com`
+    const { data, error } = await supabase.from('cliente')
+      .insert({ ...clienteForm, email })
+      .select().single()
+    if (error) { setMsg(`Error: ${error.message}`); return }
+    setClientes([...clientes, data])
+    setForm({ ...form, id_cliente: String(data.id_cliente) })
+    setNuevoCliente(false)
+    setClienteForm({ nombre: '', apellido: '', dni: '', email: '' })
+    setMsg(`Cliente ${data.nombre} ${data.apellido} registrado`)
+  }
 
   function addItem() { setItems([...items, { id_producto: '', cantidad: 1, precio_unitario: 0 }]) }
   function removeItem(i: number) { setItems(items.filter((_, idx) => idx !== i)) }
-  function updateItem(i: number, field: string, value: string | number) {
+  function updateItem(i: number, field: string, value: any) {
     const updated = [...items]
     updated[i] = { ...updated[i], [field]: value }
     if (field === 'id_producto') {
-      const prod = productos.find(p => p.id_producto === parseInt(String(value)))
+      const prod = productos.find(p => p.id_producto === parseInt(value))
       if (prod) updated[i].precio_unitario = prod.precio
     }
     setItems(updated)
   }
 
-  async function changeStatus(id: number, estado: string) {
-    await supabase.from('pedido').update({ estado }).eq('id_pedido', id)
-    setEditingStatus(null)
-    showToast(`Estado actualizado a "${estado}"`, 'success')
-    loadData()
-  }
-
   async function handleSubmit() {
     if (!form.id_cliente || !form.id_empleado || !form.id_mesa || items.some(i => !i.id_producto)) {
-      showToast('Completa todos los campos', 'error'); return
+      setMsg('Error: completa todos los campos'); return
     }
-    setSaving(true)
+    setSaving(true); setMsg('')
     const res = await fetch(`${FUNCTIONS_URL}/crear-pedido`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ANON_KEY}` },
       body: JSON.stringify({
-        id_cliente: parseInt(form.id_cliente),
-        id_empleado: parseInt(form.id_empleado),
-        id_mesa: parseInt(form.id_mesa),
+        id_cliente: parseInt(form.id_cliente), id_empleado: parseInt(form.id_empleado), id_mesa: parseInt(form.id_mesa),
         productos: items.map(i => ({ id_producto: parseInt(i.id_producto), cantidad: i.cantidad, precio_unitario: i.precio_unitario }))
       })
     })
     const data = await res.json()
     if (data.ok) {
-      showToast(`Pedido #${data.id_pedido} creado — S/ ${data.total.toFixed(2)}`, 'success')
+      const cliente = clientes.find(c => c.id_cliente === parseInt(form.id_cliente))
+      const registro = {
+        fecha: new Date().toLocaleString('es-PE'),
+        pedido: data.id_pedido,
+        cliente: cliente ? `${cliente.nombre} ${cliente.apellido}` : '—',
+        productos: items.length,
+        total: data.total
+      }
+      const nuevoHistorial = [registro, ...historial].slice(0, 8)
+      setHistorial(nuevoHistorial)
+      localStorage.setItem(HISTORIAL_KEY, JSON.stringify(nuevoHistorial))
+
+      setMsg(`Pedido #${data.id_pedido} creado — S/ ${data.total.toFixed(2)}`)
       setShowForm(false)
       setForm({ id_cliente: '', id_empleado: '', id_mesa: '' })
       setItems([{ id_producto: '', cantidad: 1, precio_unitario: 0 }])
       loadData()
-    } else {
-      showToast(`Error: ${data.error}`, 'error')
-    }
+    } else { setMsg(`Error: ${data.error}`) }
     setSaving(false)
   }
 
-  const total = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0)
+  const badge: Record<string, string> = {
+    'Pendiente': 'bg-amber-100 text-amber-700 dark:bg-amber-500/10 dark:text-amber-400',
+    'En preparacion': 'bg-blue-100 text-blue-700 dark:bg-blue-500/10 dark:text-blue-400',
+    'Entregado': 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400',
+    'Cancelado': 'bg-red-100 text-red-700 dark:bg-red-500/10 dark:text-red-400',
+  }
 
   return (
-    <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6 animate-fade-up">
+    <div className="relative">
+      <div className="absolute -top-10 right-0 w-64 h-64 bg-orange-500/5 rounded-full blur-3xl pointer-events-none" />
+
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Pedidos</h1>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{pedidos.length} pedidos en total</p>
+          <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Pedidos</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">Gestión de comandas del restaurante</p>
         </div>
-        <button type="button" onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 px-4 py-2.5 bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white rounded-xl text-sm font-semibold transition-all duration-200 shadow-sm hover:shadow-orange-200 dark:hover:shadow-orange-900/40 hover:-translate-y-0.5 active:translate-y-0">
+        <button onClick={() => setShowForm(!showForm)}
+          className="flex items-center gap-2 px-5 py-2.5 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white rounded-xl text-sm font-semibold shadow-lg shadow-orange-500/25 transition-all hover:scale-[1.02]">
           <Plus size={16} /> Nuevo pedido
         </button>
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-1 mb-6 bg-gray-100 dark:bg-gray-800/60 p-1 rounded-xl w-fit animate-fade-up anim-delay-5">
-        {FILTROS.map(f => (
-          <button type="button" key={f} onClick={() => setFiltro(f)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all duration-200 ${
-              filtro === f
-                ? 'bg-white dark:bg-gray-900 text-gray-900 dark:text-white shadow-sm'
-                : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
-            }`}>
-            {f}
-            {f !== 'Todos' && (
-              <span className="ml-1.5 text-xs opacity-50 tabular-nums">
-                {pedidos.filter(p => p.estado === f).length}
-              </span>
-            )}
-          </button>
-        ))}
-      </div>
-
-      {/* Table */}
-      {loading ? (
-        <div className="space-y-2 animate-pulse">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-14 bg-gray-200 dark:bg-gray-800 rounded-xl" />
-          ))}
-        </div>
-      ) : (
-        <div className="animate-fade-up anim-delay-10 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 overflow-hidden">
-          {filtrados.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400 dark:text-gray-600">
-              <ShoppingBag size={32} className="mb-3 opacity-40" />
-              <p className="font-medium">No hay pedidos en esta categoría</p>
-            </div>
-          ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 dark:border-gray-800">
-                  {['#', 'Cliente', 'Fecha', 'Estado', 'Total'].map(h => (
-                    <th key={h} className={`py-3.5 px-5 text-xs font-semibold text-gray-400 uppercase tracking-wider ${h === 'Total' ? 'text-right' : 'text-left'}`}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtrados.map(p => (
-                  <tr key={p.id_pedido} className="border-t border-gray-50 dark:border-gray-800/40 hover:bg-gray-50/80 dark:hover:bg-gray-800/20 transition-colors">
-                    <td className="py-3.5 px-5 font-mono text-xs font-medium text-gray-400">#{p.id_pedido}</td>
-                    <td className="py-3.5 px-5 font-medium text-gray-900 dark:text-white">{p.cliente?.nombre} {p.cliente?.apellido}</td>
-                    <td className="py-3.5 px-5 text-xs text-gray-500 dark:text-gray-400">
-                      {p.fecha_hora ? new Date(p.fecha_hora).toLocaleDateString('es-PE', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'}
-                    </td>
-                    <td className="py-3.5 px-5">
-                      {editingStatus === p.id_pedido ? (
-                        <select
-                          autoFocus
-                          defaultValue={p.estado}
-                          aria-label="Cambiar estado"
-                          onChange={e => changeStatus(p.id_pedido, e.target.value)}
-                          onBlur={() => setEditingStatus(null)}
-                          className="text-xs px-2 py-1 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-orange-400">
-                          {ESTADOS.map(s => <option key={s} value={s}>{s}</option>)}
-                        </select>
-                      ) : (
-                        <button type="button" onClick={() => setEditingStatus(p.id_pedido)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium hover:opacity-80 transition-opacity ${badge[p.estado] || badge['Pendiente']}`}>
-                          {p.estado}
-                          <ChevronDown size={11} className="opacity-60" />
-                        </button>
-                      )}
-                    </td>
-                    <td className="py-3.5 px-5 text-right font-bold text-gray-900 dark:text-white tabular-nums">
-                      S/ {parseFloat(p.total).toFixed(2)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+      {msg && (
+        <div className={`mb-4 p-3 rounded-xl text-sm ${msg.startsWith('Error') ? 'bg-red-50 dark:bg-red-500/10 text-red-700 dark:text-red-400' : 'bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'}`}>
+          {msg}
         </div>
       )}
 
-      {/* Slide-over form */}
+      {/* Formulario nuevo pedido */}
       {showForm && (
-        <div className="fixed inset-0 z-50 flex">
-          <div className="animate-backdrop absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setShowForm(false)} />
-          <div className="animate-slide-right absolute right-0 top-0 h-full w-full max-w-lg bg-white dark:bg-gray-950 shadow-2xl flex flex-col">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-              <h2 className="font-bold text-lg text-gray-900 dark:text-white">Nuevo pedido</h2>
-              <button type="button" aria-label="Cerrar" onClick={() => setShowForm(false)} className="p-1.5 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
-                <X size={18} className="text-gray-500" />
-              </button>
-            </div>
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5 mb-6">
+          <h2 className="font-semibold text-gray-900 dark:text-white mb-4">Nueva comanda</h2>
 
-            <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-              {[
-                { label: 'Cliente', field: 'id_cliente', opts: clientes.map(c => ({ v: c.id_cliente, l: `${c.nombre} ${c.apellido}` })) },
-                { label: 'Empleado', field: 'id_empleado', opts: empleados.map(e => ({ v: e.id_empleado, l: `${e.nombre} ${e.apellido}` })) },
-                { label: 'Mesa', field: 'id_mesa', opts: mesas.map(m => ({ v: m.id_mesa, l: `Mesa ${m.numero} — ${m.estado}` })) },
-              ].map(({ label, field, opts }) => (
-                <div key={field}>
-                  <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1.5">{label}</label>
-                  <select aria-label={label} value={(form as Record<string, string>)[field]} onChange={e => setForm({ ...form, [field]: e.target.value })}
-                    className="w-full px-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 transition-shadow">
-                    <option value="">Seleccionar {label.toLowerCase()}...</option>
-                    {opts.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
-                  </select>
-                </div>
-              ))}
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">Productos</label>
-                <div className="space-y-2">
-                  {items.map((item, i) => (
-                    <div key={i} className="flex gap-2 items-center bg-gray-50 dark:bg-gray-900/50 rounded-lg p-2">
-                      <select aria-label="Seleccionar producto" value={item.id_producto} onChange={e => updateItem(i, 'id_producto', e.target.value)}
-                        className="flex-1 px-2.5 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                        <option value="">Producto...</option>
-                        {productos.map(p => <option key={p.id_producto} value={p.id_producto}>{p.nombre} — S/{p.precio}</option>)}
-                      </select>
-                      <input type="number" min="1" aria-label="Cantidad" value={item.cantidad}
-                        onChange={e => updateItem(i, 'cantidad', parseInt(e.target.value) || 1)}
-                        className="w-16 px-2 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm text-center focus:outline-none focus:ring-2 focus:ring-orange-400" />
-                      <span className="text-sm text-gray-600 dark:text-gray-400 w-20 text-right font-medium tabular-nums">
-                        S/ {(item.cantidad * item.precio_unitario).toFixed(2)}
-                      </span>
-                      {items.length > 1 && (
-                        <button type="button" aria-label="Eliminar producto" onClick={() => removeItem(i)}
-                          className="p-1 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 rounded transition-colors">
-                          <X size={14} />
-                        </button>
-                      )}
-                    </div>
-                  ))}
-                </div>
-                <button type="button" onClick={addItem}
-                  className="mt-2 flex items-center gap-1.5 text-sm text-orange-500 hover:text-orange-600 font-medium transition-colors">
-                  <Plus size={14} /> Agregar producto
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs text-gray-500 dark:text-gray-400">Cliente</label>
+                <button onClick={() => setNuevoCliente(!nuevoCliente)}
+                  className="flex items-center gap-1 text-xs text-orange-500 hover:text-orange-600 font-medium">
+                  <UserPlus size={12} /> Nuevo
                 </button>
               </div>
+              <select value={form.id_cliente} onChange={e => setForm({...form, id_cliente: e.target.value})}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm">
+                <option value="">Seleccionar...</option>
+                {clientes.map(c => <option key={c.id_cliente} value={c.id_cliente}>{c.nombre} {c.apellido}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Empleado</label>
+              <select value={form.id_empleado} onChange={e => setForm({...form, id_empleado: e.target.value})}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm">
+                <option value="">Seleccionar...</option>
+                {empleados.map(e => <option key={e.id_empleado} value={e.id_empleado}>{e.nombre} {e.apellido}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Mesa</label>
+              <select value={form.id_mesa} onChange={e => setForm({...form, id_mesa: e.target.value})}
+                className="w-full px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm">
+                <option value="">Seleccionar...</option>
+                {mesas.map(m => <option key={m.id_mesa} value={m.id_mesa}>Mesa {m.numero} ({m.estado})</option>)}
+              </select>
+            </div>
+          </div>
 
-              <div className="flex items-center justify-between py-3 px-4 bg-orange-50 dark:bg-orange-950/30 rounded-xl border border-orange-100 dark:border-orange-900/30">
-                <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Total del pedido</span>
-                <span className="text-xl font-bold text-orange-600 dark:text-orange-400 tabular-nums">S/ {total.toFixed(2)}</span>
+          {/* Registro rapido de cliente nuevo */}
+          {nuevoCliente && (
+            <div className="bg-orange-50 dark:bg-orange-500/5 border border-orange-200 dark:border-orange-500/20 rounded-xl p-4 mb-4">
+              <div className="text-xs font-medium text-orange-700 dark:text-orange-400 mb-2">Registrar cliente nuevo</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                <input placeholder="Nombre" value={clienteForm.nombre} onChange={e => setClienteForm({...clienteForm, nombre: e.target.value})}
+                  className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                <input placeholder="Apellido" value={clienteForm.apellido} onChange={e => setClienteForm({...clienteForm, apellido: e.target.value})}
+                  className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                <input placeholder="DNI" value={clienteForm.dni} onChange={e => setClienteForm({...clienteForm, dni: e.target.value})}
+                  className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-white" />
+                <button onClick={crearCliente}
+                  className="px-3 py-2 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-medium">
+                  Guardar
+                </button>
               </div>
             </div>
+          )}
 
-            <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-800 flex gap-3">
-              <button type="button" onClick={handleSubmit} disabled={saving}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white rounded-xl text-sm font-semibold transition-all duration-200 hover:shadow-lg hover:shadow-orange-200 dark:hover:shadow-orange-900/40">
-                {saving
-                  ? <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  : <Check size={16} />}
-                {saving ? 'Creando...' : 'Crear pedido'}
-              </button>
-              <button type="button" onClick={() => setShowForm(false)}
-                className="px-4 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-medium text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors">
-                Cancelar
-              </button>
+          <div className="mb-4">
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-2">Productos</label>
+            {items.map((item, i) => (
+              <div key={i} className="flex gap-2 mb-2 items-center">
+                <select value={item.id_producto} onChange={e => updateItem(i, 'id_producto', e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm">
+                  <option value="">Producto...</option>
+                  {productos.map(p => <option key={p.id_producto} value={p.id_producto}>{p.nombre} — S/{p.precio} (stock {p.stock})</option>)}
+                </select>
+                <input type="number" min="1" value={item.cantidad} onChange={e => updateItem(i, 'cantidad', parseInt(e.target.value))}
+                  className="w-20 px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-white text-sm" />
+                <span className="text-sm text-gray-500 w-20 text-right">S/ {(item.cantidad * item.precio_unitario).toFixed(2)}</span>
+                {items.length > 1 && <button onClick={() => removeItem(i)} className="p-1.5 text-red-400 hover:text-red-600"><X size={15} /></button>}
+              </div>
+            ))}
+            <button onClick={addItem} className="text-sm text-orange-500 hover:text-orange-600 flex items-center gap-1 mt-1">
+              <Plus size={14} /> Agregar producto
+            </button>
+            <div className="mt-2 text-sm font-semibold text-gray-900 dark:text-white text-right">
+              Total: S/ {items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0).toFixed(2)}
             </div>
+          </div>
+
+          <div className="flex gap-2">
+            <button onClick={handleSubmit} disabled={saving}
+              className="px-5 py-2.5 bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 disabled:opacity-50 text-white rounded-xl text-sm font-semibold">
+              {saving ? 'Guardando...' : 'Crear pedido'}
+            </button>
+            <button onClick={() => setShowForm(false)}
+              className="px-5 py-2.5 border border-gray-200 dark:border-gray-700 rounded-xl text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800">
+              Cancelar
+            </button>
           </div>
         </div>
       )}
 
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-[60] animate-slide-bottom flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg border text-sm font-medium ${
-          toast.type === 'success'
-            ? 'bg-white dark:bg-gray-900 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400'
-            : 'bg-white dark:bg-gray-900 border-red-200 dark:border-red-800 text-red-700 dark:text-red-400'
-        }`}>
-          {toast.type === 'success' ? <Check size={16} /> : <X size={16} />}
-          {toast.msg}
+      {/* Historial de pedidos creados desde la web */}
+      {historial.length > 0 && (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 p-5 mb-6">
+          <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3 flex items-center gap-2">
+            <Clock size={14} className="text-orange-500" /> Historial de comandas registradas
+          </h3>
+          <div className="space-y-2">
+            {historial.map((h, i) => (
+              <div key={i} className="flex flex-wrap items-center justify-between gap-2 text-sm py-2 px-3 rounded-xl bg-gray-50 dark:bg-gray-800/50">
+                <div className="flex items-center gap-3">
+                  <span className="font-semibold text-gray-900 dark:text-white">#{h.pedido}</span>
+                  <span className="text-gray-600 dark:text-gray-300">{h.cliente}</span>
+                </div>
+                <div className="flex items-center gap-4 text-xs">
+                  <span className="text-gray-400">{h.fecha}</span>
+                  <span className="text-gray-500">{h.productos} productos</span>
+                  <span className="font-semibold text-emerald-600 dark:text-emerald-400">S/ {parseFloat(h.total).toFixed(2)}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Lista de pedidos con boton de detalle */}
+      {loading ? <div className="py-12 text-center text-gray-400 animate-pulse">Cargando pedidos...</div> : (
+        <div className="bg-white dark:bg-gray-900 rounded-2xl border border-gray-200 dark:border-gray-800 overflow-hidden">
+          <div className="px-5 py-4 border-b border-gray-100 dark:border-gray-800">
+            <h2 className="font-semibold text-gray-900 dark:text-white">Todos los pedidos</h2>
+          </div>
+          <div className="divide-y divide-gray-50 dark:divide-gray-800/50">
+            {pedidos.map(p => (
+              <div key={p.id_pedido}>
+                <button onClick={() => toggleDetalle(p.id_pedido)}
+                  className="w-full flex items-center justify-between px-5 py-3.5 hover:bg-gray-50 dark:hover:bg-gray-800/30 transition-colors text-left">
+                  <div className="flex items-center gap-4 min-w-0">
+                    <span className="font-semibold text-gray-900 dark:text-white shrink-0">#{p.id_pedido}</span>
+                    <span className="text-sm text-gray-600 dark:text-gray-300 truncate">{p.cliente?.nombre} {p.cliente?.apellido}</span>
+                    <span className="text-xs text-gray-400 hidden sm:block">
+                      {p.fecha_hora ? new Date(p.fecha_hora).toLocaleString('es-PE', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${badge[p.estado] || badge['Pendiente']}`}>{p.estado}</span>
+                    <span className="font-semibold text-gray-900 dark:text-white text-sm">S/ {parseFloat(p.total).toFixed(2)}</span>
+                    <ChevronDown size={15} className={`text-gray-400 transition-transform ${expandido === p.id_pedido ? 'rotate-180' : ''}`} />
+                  </div>
+                </button>
+                {expandido === p.id_pedido && (
+                  <div className="px-5 pb-4 bg-gray-50/50 dark:bg-gray-800/20">
+                    {!detalles[p.id_pedido] ? (
+                      <div className="py-3 text-xs text-gray-400 animate-pulse">Cargando detalle...</div>
+                    ) : (
+                      <div className="pt-3 space-y-1.5">
+                        {detalles[p.id_pedido].map((d: any, i: number) => (
+                          <div key={i} className="flex justify-between text-sm py-1.5 px-3 rounded-lg bg-white dark:bg-gray-900">
+                            <span className="text-gray-700 dark:text-gray-300">{d.producto?.nombre} <span className="text-gray-400">× {d.cantidad}</span></span>
+                            <span className="font-medium text-gray-900 dark:text-white">S/ {parseFloat(d.subtotal).toFixed(2)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
